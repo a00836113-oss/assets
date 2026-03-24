@@ -1,15 +1,18 @@
-import streamlit as st
+import json
+from pathlib import Path
+from datetime import timedelta, date
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import timedelta, date
+import streamlit as st
 
 # =========================
 # PAGE CONFIG
 # =========================
 st.set_page_config(
     page_title="Control de Assets — Dashboard",
-    page_icon="",
+    page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -169,10 +172,38 @@ STATUS_COLORS = {
 }
 
 # =========================
+# PERSISTENCE
+# =========================
+STATUS_FILE = Path("task_statuses.json")
+DEFAULT_STATUSES = {t["id"]: "pending" for t in TASKS}
+
+
+def load_statuses() -> dict:
+    if STATUS_FILE.exists():
+        try:
+            with open(STATUS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            data = {int(k): v for k, v in data.items()}
+            merged = DEFAULT_STATUSES.copy()
+            merged.update(data)
+            return merged
+        except Exception:
+            return DEFAULT_STATUSES.copy()
+
+    return DEFAULT_STATUSES.copy()
+
+
+def save_statuses(statuses: dict) -> None:
+    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+        json.dump(statuses, f, ensure_ascii=False, indent=2)
+
+
+# =========================
 # SESSION STATE
 # =========================
 if "statuses" not in st.session_state:
-    st.session_state.statuses = {t["id"]: "pending" for t in TASKS}
+    st.session_state.statuses = load_statuses()
 
 # =========================
 # HELPERS
@@ -214,6 +245,7 @@ def build_task_df() -> pd.DataFrame:
         start_date = week_start(t["start"])
         end_date = week_end_from_index(t["end"])
         duration_weeks = t["end"] - t["start"]
+
         rows.append({
             "ID": t["id"],
             "Tarea": t["name"] + (" [PILOTO]" if t["pilot"] else ""),
@@ -233,6 +265,7 @@ def build_task_df() -> pd.DataFrame:
             "ColorFase": PHASES[t["phase"]]["color"],
             "Pilot": t["pilot"],
         })
+
     return pd.DataFrame(rows)
 
 
@@ -276,7 +309,8 @@ st.sidebar.progress(progress_pct / 100)
 st.sidebar.caption(f"{progress_pct}% completado")
 
 if st.sidebar.button("↺ Reiniciar estados", use_container_width=True):
-    st.session_state.statuses = {t["id"]: "pending" for t in TASKS}
+    st.session_state.statuses = DEFAULT_STATUSES.copy()
+    save_statuses(st.session_state.statuses)
     st.rerun()
 
 # =========================
@@ -295,6 +329,7 @@ st.write("")
 # =========================
 done, prog, pend, total, pct = get_stats()
 col1, col2, col3, col4 = st.columns(4)
+
 with col1:
     metric_card("Completadas", str(done), f"de {total} tareas", SN_DARK_GREEN)
 with col2:
@@ -335,6 +370,7 @@ if view == "Overview":
 
         phase_df = pd.DataFrame(phase_rows)
         fig_phase = go.Figure()
+
         for _, row in phase_df.iterrows():
             fig_phase.add_trace(
                 go.Bar(
@@ -528,21 +564,29 @@ elif view == "Gantt":
     st.markdown("<div class='section-title'>Actualizar estado de tareas</div>", unsafe_allow_html=True)
 
     edit_df = df[["ID", "Tarea", "Fase", "Estado", "InicioTxt", "FinTxt"]].copy()
+
     for _, row in edit_df.iterrows():
         cols = st.columns([0.08, 0.34, 0.16, 0.20, 0.22])
-        cols[0].write(f"**{int(row['ID'])}**")
+
+        task_id = int(row["ID"])
+        current_key = st.session_state.statuses[task_id]
+
+        cols[0].write(f"**{task_id}**")
         cols[1].write(row["Tarea"])
         cols[2].write(row["Fase"])
         cols[3].write(f"{row['InicioTxt']} → {row['FinTxt']}")
-        current_key = [k for k, v in STATUS_LABELS.items() if v == row["Estado"]][0]
+
         new_status = cols[4].selectbox(
-            f"Estado {int(row['ID'])}",
+            f"Estado {task_id}",
             options=list(STATUS_LABELS.keys()),
             index=list(STATUS_LABELS.keys()).index(current_key),
             format_func=lambda x: f"{STATUS_EMOJI[x]} {STATUS_LABELS[x]}",
-            key=f"status_{int(row['ID'])}",
+            key=f"status_{task_id}",
         )
-        st.session_state.statuses[int(row["ID"])] = new_status
+
+        if st.session_state.statuses[task_id] != new_status:
+            st.session_state.statuses[task_id] = new_status
+            save_statuses(st.session_state.statuses)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -588,7 +632,7 @@ elif view == "Kanban":
                         f"""
                         <div style="background:#F8FAFC;border:1px solid #E5E7EB;border-left:4px solid {phase['color']};
                                     border-radius:12px;padding:12px 14px;margin-bottom:10px;">
-                            <div style="font-weight:700;color:#1F2937;margin-bottom:6px;">{t['name']} {'<span style=\"font-size:10px;color:#F59E0B\">[PILOTO]</span>' if t['pilot'] else ''}</div>
+                            <div style="font-weight:700;color:#1F2937;margin-bottom:6px;">{t['name']} {'<span style="font-size:10px;color:#F59E0B">[PILOTO]</span>' if t['pilot'] else ''}</div>
                             <div style="font-size:12px;color:{phase['color']};font-weight:600;">{phase['label']}</div>
                             <div style="font-size:12px;color:#6B7280;margin-top:4px;">{date_text}</div>
                         </div>
